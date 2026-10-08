@@ -2,82 +2,135 @@ import numpy as np
 from scipy.interpolate import CubicSpline
 
 
-def build_full_ref_traj(
-    dt,
-    v_max: float,
-    a_max: float,
-    x_length: float = 10.0,
-    spacing: float = 0.3,
-    circle_turns: int = 1,
-    traj_type: str = "circular",
-    sine_cycles: float = 3.0,
-    amplitude: float = 1.0,
-    amplitude_modulation: float = 1.0,
-    amplitude_modulation_cycles: float = 1.0,
-) -> tuple[CubicSpline, CubicSpline]:
+def generate_ref_points(ref: dict) -> np.ndarray:
     """
-    Build a reference trajectory for tracking scenario.
-
-    The geometry and the speed profile are returned as continuous cubic
-    splines parameterized by cumulative arc length s:
-
-        xy_spline(s) = (x, y)
-        v_spline(s)  = v
-
-    theta and omega are derived analytically from the spline derivatives
-    (see eval_ref_state).
+    Generate world-coordinate points from ref (headings in radians).
     """
+    traj_type = ref["traj_type"]
+    if traj_type not in {"straight", "circular", "sinusoidal"}:
+        raise ValueError(f"Unknown traj_type: {traj_type!r}.")
 
-    n_points = max(2, int(round(x_length / spacing)))
+    def positive(value, name):
+        value = float(value)
+        if not np.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be finite and positive.")
+        return value
+
+    def point(value, name):
+        value = np.asarray(value, dtype=float)
+        if value.shape != (2,) or not np.all(np.isfinite(value)):
+            raise ValueError(f"{name} must contain two finite coordinates.")
+        return value
+
+    spacing = positive(ref["spacing"], "spacing")
+    cfg = ref[traj_type]
+    start = point(ref["start_position"][:2], f"{traj_type}.start")
 
     if traj_type == "straight":
-        xy_ref = get_straight_traj(
-            n_points=n_points,
-            x_length=x_length,
-        )
-    elif traj_type == "circular":
-        # Interpret x_length as the per-lap circumference, so spacing ~= x_length
-        # / n_points; the full path is circle_turns laps of that many points.
-        xy_ref = get_circular_traj(
-            n_points=n_points * circle_turns,
-            n_turns=circle_turns,
-            radius=x_length / (2.0 * np.pi),
-            center=(0.0, 0.0),
-        )
-    elif traj_type == "sinusoidal":
-        xy_ref = get_sinusoidal_traj(
-            n_points=n_points,
-            x_length=x_length,
-            sine_cycles=sine_cycles,
-            amplitude=amplitude,
-            amplitude_modulation=amplitude_modulation,
-            amplitude_modulation_cycles=amplitude_modulation_cycles,
-        )
+        end = point(cfg["end"], "straight.end")
+        length = positive(np.linalg.norm(end - start), "straight.length")
+        n = max(2, int(np.ceil(length / spacing)) + 1)
+        return np.linspace(start, end, n)
+
+    heading = float(cfg.get("heading", 0.0))
+    if not np.isfinite(heading):
+        raise ValueError("heading must be finite.")
+    c, s = np.cos(heading), np.sin(heading)
+    rotation = np.array([[c, -s], [s, c]])
+
+    if traj_type == "circular":
+        radius = positive(cfg["radius"], "circular.radius")
+        turns_value = positive(cfg.get("turns", 1), "circular.turns")
+        if not turns_value.is_integer():
+            raise ValueError("circular.turns must be an integer.")
+        turns = int(turns_value)
+        clockwise = cfg.get("clockwise", False)
+        if not isinstance(clockwise, bool):
+            raise ValueError("circular.clockwise must be a boolean.")
+        direction = -1.0 if clockwise else 1.0
+        segments_per_lap = max(16, int(np.ceil(2.0 * np.pi * radius / spacing)))
+        phi = np.linspace(0.0, 2.0 * np.pi * turns, segments_per_lap * turns + 1)
+        # Start on the circle with tangent +x; its center is (0, direction*r).
+        local = np.column_stack((
+            radius * np.sin(phi),
+            direction * radius * (1.0 - np.cos(phi)),
+        ))
+        local[-1] = local[0]
     else:
-        raise ValueError(f"Unknown traj_type '{traj_type}'.")
+        length = positive(cfg["length"], "sinusoidal.length")
+        cycles = positive(cfg.get("cycles", 1.0), "sinusoidal.cycles")
+        amplitude = float(cfg["amplitude"])
+        if not np.isfinite(amplitude) or amplitude < 0:
+            raise ValueError("sinusoidal.amplitude must be finite and >= 0.")
+        # spacing resolves the baseline; also resolve each oscillation.
+        segments = max(2, int(np.ceil(length / spacing)), int(np.ceil(32.0 * cycles)))
+        p = np.linspace(0.0, 1.0, segments + 1)
+        local = np.column_stack((
+            length * p,
+            amplitude * np.sin(2.0 * np.pi * cycles * p),
+        ))
 
-    xy_ref = np.asarray(xy_ref, dtype=float).copy()
-    xy_ref -= xy_ref[0]
+    return start + local @ rotation.T
 
-    dxy0 = xy_ref[1] - xy_ref[0]
-    theta0 = np.arctan2(dxy0[1], dxy0[0])
 
-    c = np.cos(theta0)
-    s_rot = np.sin(theta0)
-    R = np.array([[c, s_rot], [-s_rot, c]])
+def validate_ref_bounds(xy_spline: CubicSpline, bounds: dict) -> None:
+    """Check knots and all interior coordinate extrema, including overshoot."""
+    limits = np.asarray([bounds["x"], bounds["y"]], dtype=float)
+    if (limits.shape != (2, 2) or not np.all(np.isfinite(limits))
+            or np.any(limits[:, 0] >= limits[:, 1])):
+        raise ValueError("bounds must contain finite, increasing x/y intervals.")
+    if not np.all(np.isfinite(xy_spline.c)):
+        raise ValueError("Reference contains non-finite spline coefficients.")
 
-    xy_ref = xy_ref @ R.T
+    candidates = list(xy_spline.x)
+    for i, width in enumerate(np.diff(xy_spline.x)):
+        for axis in range(2):
+            a, b, c, _ = xy_spline.c[:, i, axis]
+            for root in np.roots([3.0 * a, 2.0 * b, c]):
+                if abs(root.imag) < 1e-10 and 0.0 < root.real < width:
+                    candidates.append(xy_spline.x[i] + float(root.real))
 
-    dxy = np.diff(xy_ref, axis=0)
+    xy = xy_spline(np.asarray(candidates))
+    if not np.all(np.isfinite(xy)):
+        raise ValueError("Reference contains non-finite coordinates.")
+    actual_min, actual_max = xy.min(axis=0), xy.max(axis=0)
+    tolerance = 1e-9
+    if (np.any(actual_min < limits[:, 0] - tolerance)
+            or np.any(actual_max > limits[:, 1] + tolerance)):
+        raise ValueError(
+            f"Generated reference: x=[{actual_min[0]:.3f}, {actual_max[0]:.3f}], "
+            f"y=[{actual_min[1]:.3f}, {actual_max[1]:.3f}]. "
+            f"Allowed bounds: x={bounds['x']}, y={bounds['y']}."
+        )
 
-    theta_segments = np.unwrap(np.arctan2(dxy[:, 1], dxy[:, 0]))
-    theta_segments -= theta_segments[0]
 
-    distances = compute_path_distances(xy_ref)
+def build_full_ref_traj(
+    ref: dict,
+    v_max: float,
+    a_max: float,
+) -> tuple[CubicSpline, CubicSpline]:
+    """
+    Build a finite reference and reject inadmissible geometry before use.
 
-    # Closed loops (e.g. circular) get periodic splines so the reference wraps
-    # around: the MPC horizon never runs out of points and the loop closes.
-    closed = bool(np.allclose(xy_ref[0], xy_ref[-1]))
+    Splines use cumulative chord length s. All paths, including multi-lap
+    circles, end with zero reference speed and are not periodically repeated.
+    """
+    try:
+        xy_ref = generate_ref_points(ref)
+        distances = compute_path_distances(xy_ref)
+        if not np.all(np.isfinite(distances)) or np.any(distances <= 0.0):
+            raise ValueError("Consecutive reference points must be finite and differ.")
+        dxy = np.diff(xy_ref, axis=0)
+        theta_segments = np.unwrap(np.arctan2(dxy[:, 1], dxy[:, 0]))
+        s = np.concatenate(([0.0], np.cumsum(distances)))
+        xy_spline = CubicSpline(s, xy_ref, bc_type="not-a-knot", extrapolate=False)
+        validate_ref_bounds(xy_spline, ref["bounds"])
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "Reference parameters are not admissible. "
+            "Change parameters in experiment.yaml. "
+            f"{exc}"
+        ) from exc
 
     v_ref = get_velocity(
         xy_ref=xy_ref,
@@ -85,22 +138,9 @@ def build_full_ref_traj(
         v_max=v_max,
         a_max=a_max,
         v_start=None,
-        v_end=None if closed else 0.0,
+        v_end=0.0,
     )
-
-    # Cumulative arc length along the points, used to parameterize the splines.
-    s = np.concatenate([[0.0], np.cumsum(distances)])
-
-    bc_type = "periodic" if closed else "not-a-knot"
-
-    if closed:
-        # bc_type="periodic" requires the endpoints to match to machine precision.
-        xy_ref[-1] = xy_ref[0]
-        v_ref[-1] = v_ref[0]
-
-    xy_spline = CubicSpline(s, xy_ref, bc_type=bc_type)
-    v_spline = CubicSpline(s, v_ref, bc_type=bc_type)
-
+    v_spline = CubicSpline(s, v_ref, bc_type="not-a-knot", extrapolate=False)
     return xy_spline, v_spline
 
 
@@ -224,73 +264,6 @@ def sample_full_traj(
         [eval_ref_state(xy_spline, v_spline, s) for s in s_grid],
         dtype=float,
     )
-
-
-def get_straight_traj(
-    n_points: int,
-    x_length: float,
-) -> np.ndarray:
-    """
-    Straight line of length x_length along x (y = 0).
-    """
-
-    x = np.linspace(0.0, x_length, n_points)
-
-    xy_ref = np.zeros((n_points, 2))
-    xy_ref[:, 0] = x
-    xy_ref[:, 1] = 0.0
-
-    return xy_ref
-
-
-def get_circular_traj(
-    n_points: int,
-    n_turns: int = 1,
-    center: tuple[float, float] = (0.0, 0.0),
-    radius: float = 2.0,
-) -> np.ndarray:
-    """
-    Circular path of n_turns laps.
-
-    endpoint=False keeps the path open (it does not snap back onto the start),
-    so the velocity profile can decelerate to a stop after the last lap.
-    """
-
-    cx, cy = center
-    phi = np.linspace(0.0, 2.0 * np.pi * n_turns, n_points, endpoint=False)
-
-    xy_ref = np.zeros((n_points, 2))
-    xy_ref[:, 0] = cx + radius * np.cos(phi)
-    xy_ref[:, 1] = cy + radius * np.sin(phi)
-
-    return xy_ref
-
-
-def get_sinusoidal_traj(
-    n_points: int,
-    x_length: float,
-    sine_cycles: float,
-    amplitude: float,
-    amplitude_modulation: float,
-    amplitude_modulation_cycles: float,
-) -> np.ndarray:
-
-    p = np.linspace(0.0, 1.0, n_points)
-    x = x_length * p
-
-    amp_envelope = amplitude * (
-        1.0
-        + amplitude_modulation
-        * np.sin(2.0 * np.pi * amplitude_modulation_cycles * p)
-    )
-
-    y = amp_envelope * np.sin(2.0 * np.pi * sine_cycles * p)
-
-    xy_ref = np.zeros((len(x), 2))
-    xy_ref[:, 0] = x
-    xy_ref[:, 1] = y
-
-    return xy_ref
 
 
 def get_velocity(

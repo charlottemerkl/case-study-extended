@@ -1,4 +1,5 @@
 import argparse
+import sys
 import yaml
 import time
 import threading
@@ -12,6 +13,10 @@ from pynput import keyboard
 import casadi as ca
 import numpy as np
 
+# Direct script execution adds src/sim, rather than the project root, to sys.path.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from src.sim.dynamics import RobotParams
 from src.sim.solver import (
     euler_step,
@@ -19,7 +24,6 @@ from src.sim.solver import (
 )
 from src.mpc.reference_generation import (
     build_full_ref_traj,
-    eval_ref_state,
     sample_ref_window,
 )
 
@@ -128,21 +132,11 @@ def setup_mpc_sim(exp_config: dict):
     v_max = vehicle_model.config.v_max
     a_max = vehicle_model.config.a_max
 
-    # Discretizes the entire reference trajectory at the MPC timestep.
+    # Validate the full reference geometry before starting the simulation.
     full_ref_traj = build_full_ref_traj(
-        dt=dt,
+        ref=exp_config["ref"],
         v_max=v_max,
         a_max=a_max,
-        x_length=float(exp_config["plant"]["sim"].get("x_length", 10.0)),
-        spacing=float(exp_config["plant"]["sim"].get("spacing", 0.3)),
-        circle_turns=int(exp_config["plant"]["sim"].get("circle_turns", 1)),
-        traj_type=exp_config["plant"]["sim"].get("traj_type", "circular"),
-        sine_cycles=float(exp_config["plant"]["sim"].get("sine_cycles", 3.0)),
-        amplitude=float(exp_config["plant"]["sim"].get("amplitude", 1.0)),
-        amplitude_modulation=float(exp_config["plant"]["sim"].get("amplitude_modulation", 1.0)),
-        amplitude_modulation_cycles=float(
-            exp_config["plant"]["sim"].get("amplitude_modulation_cycles", 1.0)
-        ),
     )
 
     return mpc, full_ref_traj
@@ -180,15 +174,19 @@ def run_sim_np(
 
     solver_type = exp_config["mpc"].get("solver", "rk4")  
 
-    state = np.array(exp_config["plant"].get(
-        "start_position", [0.0, 0.0, 0.0, 0.0, 0.0])
-    )  # State: [x, y, theta, v, omega]
+    state = np.asarray(exp_config["ref"]["start_position"], dtype=float)  # State: [x, y, theta, v, omega]
 
     xy_spline = None
     v_spline = None
     if full_ref_traj is not None:
         xy_spline, v_spline = full_ref_traj
-        state = eval_ref_state(xy_spline, v_spline, 0.0)
+        if state.shape != (5,) or not np.all(np.isfinite(state)):
+            raise ValueError("ref.start_position must contain five finite values.")
+        if not np.allclose(state[:2], xy_spline(0.0), rtol=0.0, atol=1e-9):
+            raise ValueError(
+                "ref.start_position[:2] must match the reference start. "
+                "Change parameters in experiment.yaml."
+            )
     s_ref = 0.0  # Arc-length progress along the reference
     x_ref_window = None
 

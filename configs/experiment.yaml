@@ -4,23 +4,42 @@
 robot:
   name: e_puck
 
+# Reference geometry in world coordinates; validated before simulation.
+ref:
+  start_position: [0.0, 0.0, 0.0, 0.0, 0.0]  # [x, y, theta, v, omega]
+  traj_type: sinusoidal  # straight, circular, sinusoidal
+  spacing: 0.1          # geometric resolution, not a timestep
+  bounds:
+    x: [-5.0, 5.0]
+    y: [-5.0, 5.0]
+
+  straight:
+    end: [4.0, 3.0]
+
+  circular:
+    radius: 2.0
+    heading: 0.0        # initial tangent direction [rad]
+    turns: 3            # finite lap count, stop at the end
+    clockwise: false
+
+  sinusoidal:
+    length: 4.0         # baseline length, not arc length
+    heading: 0.0        # baseline direction [rad], not initial tangent
+    amplitude: 1.0
+    cycles: 2.0
+
 plant:
   # Plant timestep
   dt: 0.001
-  start_position: [0.0, 0.0, 0.0, 0.0, 0.0]  # [x, y, theta, v, omega]
-  
-  # settings for simulation plant
-  sim:
-    # Numerical integration
-    solver: rk4    # euler or rk4
-    traj_type: sinusoidal   # straight, circular or sinusoidal
-    x_length: 20.0  # total curve length (per-lap circumference for circular)
-    spacing: 0.3
-    circle_turns: 3  # number of laps for the circular trajectory
 
   # settings for digital twin plant (webots)
   twin:
     # Physical parameters
+
+  # settings for simulation plant
+  sim:
+    # Numerical integration
+    solver: rk4    # euler or rk4
 
 mpc:
   # MPC timestep
