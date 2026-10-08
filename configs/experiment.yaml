@@ -12,9 +12,10 @@ ref:
   bounds:
     x: [-5.0, 5.0]
     y: [-5.0, 5.0]
+  t_final: 100.0          # time limit [s]
 
   straight:
-    end: [4.0, 3.0]
+    end: [-4.0, 3.0]
 
   circular:
     radius: 2.0
@@ -51,7 +52,7 @@ mpc:
 
   # MPC cost weights (nominal diagonal cost weights built into np.diag by the MPC setup).
   cost:
-    Q:  [20.0, 20.0, 30.0, 0.0, 30.0]   # x, y, theta, v, omega
+    Q:  [20.0, 20.0, 10.0, 1.0, 10.0]   # x, y, theta, v, omega
     R:  [0.5, 0.5]                       # tau_l, tau_r
     Qe: [40.0, 40.0, 0.0, 0.0, 0.0]     # terminal: x, y, theta, v, omega
 

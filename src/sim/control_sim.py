@@ -1,16 +1,10 @@
 import argparse
 import sys
 import yaml
-import time
-import threading
 from pathlib import Path
-import csv
-import json
 import traceback
 
-from pynput import keyboard
 
-import casadi as ca
 import numpy as np
 
 # Direct script execution adds src/sim, rather than the project root, to sys.path.
@@ -25,6 +19,7 @@ from src.sim.solver import (
 from src.mpc.reference_generation import (
     build_full_ref_traj,
     sample_ref_window,
+    sample_full_traj,
 )
 
 from src.mpc.vehicle_models import (
@@ -33,10 +28,7 @@ from src.mpc.vehicle_models import (
     NonLinearDynamicsModel,
 )
 from src.mpc.mpc_controller import MPC, MPCConfig 
-# from mpc.mpc_report import (
-#     make_mpc_report_row,
-#     write_mpc_report,
-# )
+from src.utils.experiment_recorder import ExperimentRecorder
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -69,7 +61,7 @@ def load_config(file_path: str) -> dict:
     return data
 
 
-def build_vehicle_model(robot_name: str, model_type: str):
+def build_vehicle_model(robot_name: str, model_type: str, robot_config_path=None):
     """
     Load MPC vehicle model config from:
 
@@ -81,7 +73,7 @@ def build_vehicle_model(robot_name: str, model_type: str):
     Returns an instance of LinearDynamicsModel or NonLinearDynamicsModel depending on the model_type argument.
     """
 
-    robot_config_path = Path("configs/robots") / f"{robot_name}.yaml"
+    robot_config_path = robot_config_path or Path("configs/robots") / f"{robot_name}.yaml"
     model_config = ModelConfig.load_model_config(str(robot_config_path))
 
     if model_type == "linear":
@@ -93,7 +85,7 @@ def build_vehicle_model(robot_name: str, model_type: str):
     raise ValueError(f"Unknown vehicle model type: {model_type}")
 
 
-def setup_mpc_sim(exp_config: dict):
+def setup_mpc_sim(exp_config: dict, robot_config_path=None):
     """
     Build vehicle model, MPC, and full reference trajectory.
     """
@@ -104,6 +96,7 @@ def setup_mpc_sim(exp_config: dict):
     vehicle_model = build_vehicle_model(
         robot_name=robot_name,
         model_type=vehicle_model_type,
+        robot_config_path=robot_config_path,
     )
 
     dt = float(exp_config["mpc"].get("dt", 0.1))
@@ -160,19 +153,22 @@ def run_sim_np(
     exp_config: dict,
     mpc: MPC | None = None,
     full_ref_traj: tuple | None = None,
+    recorder: ExperimentRecorder | None = None,
 ) -> dict | None:
     """
     Run the sim loop. Returns None on success, or an error-info dict if the
-    simulation aborted on a solver/runtime error (the partial report + metrics
-    are still written so the failure can be inspected).
+    simulation aborted on a solver/runtime error. The caller finalizes the
+    recorder, including after KeyboardInterrupt, to preserve partial results.
     """
 
     # -------------- setup ------------- #
-    dt = float(exp_config["plant"]["sim"].get("dt", 0.1))
+    dt = float(exp_config["plant"]["dt"])
     mpc_dt = float(exp_config["mpc"].get("dt", 0.1))
-    mpc_ratio = max(int(mpc_dt / dt), 1)
+    if dt <= 0 or mpc_dt < dt or not np.isclose(mpc_dt / dt, round(mpc_dt / dt)):
+        raise ValueError("mpc.dt must be a positive integer multiple of plant.dt.")
+    mpc_ratio = int(round(mpc_dt / dt))
 
-    solver_type = exp_config["mpc"].get("solver", "rk4")  
+    solver_type = exp_config["plant"]["sim"].get("solver", "rk4")
 
     state = np.asarray(exp_config["ref"]["start_position"], dtype=float)  # State: [x, y, theta, v, omega]
 
@@ -199,14 +195,13 @@ def run_sim_np(
     cost = None
     residuals = None
     
-    mpc_report_rows = []
-    csv_rows = []
     error_info: dict | None = None
 
     try:
-        while True:
+        while t < float(exp_config["ref"].get("t_final", 100.0)):
             
-            if (step % mpc_ratio) == 0:
+            mpc_updated = (step % mpc_ratio) == 0
+            if mpc_updated:
  
                 x_ref_window, s_ref = sample_ref_window(
                     xy_spline=xy_spline,
@@ -231,6 +226,11 @@ def run_sim_np(
                 print(f"[mpc] step={step} t={t:.3f} action = {action} cost={cost:.4f} res={residuals}")
 
 
+            if recorder is not None:
+                recorder.record(step=step, time_s=t, state=state, action=action,
+                                cost=cost, mpc_updated=mpc_updated,
+                                v_ref=float(x_ref_window[0, 3]))
+
             if solver_type == "euler":
                 state = euler_step(state, action, dt, robot_params)
             elif solver_type == "rk4":
@@ -240,16 +240,16 @@ def run_sim_np(
             print(f"[sim] step={step} t={t:.3f} state = {state}")
 
             step += 1
-            t += dt
+            t = step * dt
 
 
     except KeyboardInterrupt:
         print("Simulation stopped by user.")
+        raise
 
     except Exception as e:
         # Solver / runtime failure (e.g. acados status != 0 from a badly
-        # perturbed model). Record it so that the failure is reported. Partial data is still saved
-        # by the finally block below.
+        # perturbed model). The caller saves the report and partial data.
         error_info = {
             "type": type(e).__name__,
             "message": str(e),
@@ -267,53 +267,49 @@ def main() -> None:
 
     args = parse_args()
 
-    # Sim-only and MPC-only configs are merged into the single dict the rest
-    # of the code consumes. MPC keys win on shared keys (e.g. mpc_dt).
     exp_config = load_config(str(Path(args.exp_config).resolve()))
     robot_config = load_config(str(Path(args.robot_config).resolve()))
 
-    robot_params = RobotParams(
-        m=float(robot_config.get("mass", 10.0)),
-        J=float(robot_config.get("inertia", {}).get("Izz", 1.0)),
-        L=float(robot_config.get("wheel_base", 0.5)),
-        r=float(robot_config.get("wheel_radius", 0.1)),
-        b_v=float(robot_config.get("linear_friction", 0.1)),
-        b_omega=float(robot_config.get("angular_friction", 0.1)),
+    recorder = ExperimentRecorder(
+        Path(__file__).resolve().parents[2] / "experiments",
+        plant_type="sim",
+        experiment_config=exp_config,
+        robot_config=robot_config,
     )
-
-    status: dict = {"ok": True, "error": None}
-
+    print(f"[experiment] {recorder.directory}")
+    status = {"ok": True, "state": "completed", "error": None}
     try:
-        mpc = None
-        full_ref_traj = None
-
-        mpc, full_ref_traj = setup_mpc_sim(exp_config)
-
+        robot = robot_config["robot"]
+        robot_params = RobotParams(
+            m=float(robot["mass"]),
+            J=float(robot["inertia"]["Izz"]),
+            L=float(robot["wheel_base"]),
+            r=float(robot["wheel_radius"]),
+            b_v=float(robot["linear_friction"]),
+            b_omega=float(robot["angular_friction"]),
+        )
+        mpc, full_ref_traj = setup_mpc_sim(exp_config, Path(args.robot_config).resolve())
+        recorder.set_reference(sample_full_traj(*full_ref_traj, ds=0.02)[:, :2])
         error_info = run_sim_np(
             robot_params=robot_params,
             exp_config=exp_config,
             mpc=mpc,
             full_ref_traj=full_ref_traj,
+            recorder=recorder,
         )
         if error_info is not None:
-            status["ok"] = False
-            status["error"] = error_info
-
-    except Exception as e:
-        # Failure during setup (e.g. acados model build for a badly perturbed model)
-        status["ok"] = False
-        status["error"] = {
-            "type": type(e).__name__,
-            "message": str(e),
-            "phase": "setup",
-            "traceback": traceback.format_exc(),
-        }
+            status.update(ok=False, state="failed", error=error_info)
+    except KeyboardInterrupt:
+        status.update(ok=False, state="interrupted")
+    except Exception as exc:
+        status.update(ok=False, state="failed", error={
+            "type": type(exc).__name__, "message": str(exc),
+            "phase": "setup", "traceback": traceback.format_exc(),
+        })
         traceback.print_exc()
-
     finally:
-        with open("experiments/status.json", "w") as f:
-            json.dump(status, f, indent=2)
-        print(f"[status] ok={status['ok']} -> experiments/status.json")
+        recorder.finalize(status)
+        print(f"[status] {status['state']} -> {recorder.directory / 'report.md'}")
 
 
 if __name__ == "__main__":
