@@ -1,0 +1,38 @@
+# This config file defines the configuration for the experiment, 
+# including chosen MPC settings, plant (i.e. digital twin or simulation) settings, etc.
+
+robot:
+  name: e_puck
+
+plant:
+  # Plant timestep
+  dt: 0.001
+  start_position: [0.0, 0.0, 0.0, 0.0, 0.0]  # [x, y, theta, v, omega]
+  
+  # settings for simulation plant
+  sim:
+    # Numerical integration
+    solver: rk4    # euler or rk4
+    traj_type: sinusoidal   # straight, circular or sinusoidal
+    x_length: 20.0  # total curve length (per-lap circumference for circular)
+    spacing: 0.3
+    circle_turns: 3  # number of laps for the circular trajectory
+
+  # settings for digital twin plant (webots)
+  twin:
+    # Physical parameters
+
+mpc:
+  # MPC timestep
+  dt: 0.01
+
+  vehicle_model: nonlinear   # linear or nonlinear
+  horizon: 50
+  acados_json_file: "build/acados_ocp_tracking_diff_drive.json"
+
+  # MPC cost weights (nominal diagonal cost weights built into np.diag by the MPC setup).
+  cost:
+    Q:  [20.0, 20.0, 30.0, 0.0, 30.0]   # x, y, theta, v, omega
+    R:  [0.5, 0.5]                       # tau_l, tau_r
+    Qe: [40.0, 40.0, 0.0, 0.0, 0.0]     # terminal: x, y, theta, v, omega
+
