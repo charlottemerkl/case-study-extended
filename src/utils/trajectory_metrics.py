@@ -2,9 +2,9 @@
 import numpy as np
 
 
-def trajectory_metrics(actual_xy, reference_xy):
+def trajectory_distances(actual_xy, reference_xy):
     """
-    Return sample-weighted MSE, MAE and RMSE of point-to-path distances.
+    Return the point-to-path distance for each actual sample.
 
     Project onto finite line segments, not only the reference vertices. This
     measures geometric tracking, not timing, lap progress or path completion.
@@ -41,9 +41,17 @@ def trajectory_metrics(actual_xy, reference_xy):
             residual = offsets - fraction[:, :, None] * vectors[None, :, :]
             best = np.minimum(best, np.sum(residual * residual, axis=2).min(axis=1))
         distances_squared[i:i + len(points)] = best
-    mse = float(np.mean(distances_squared))
-    return {"samples": len(actual), "mse": mse,
-            "mae": float(np.mean(np.sqrt(distances_squared))),
+    return np.sqrt(distances_squared)
+
+
+def trajectory_metrics(actual_xy, reference_xy):
+    """Return sample-weighted MSE, MAE and RMSE of point-to-path distances."""
+    distances = trajectory_distances(actual_xy, reference_xy)
+    if distances is None:
+        return None
+    mse = float(np.mean(distances ** 2))
+    return {"samples": len(distances), "mse": mse,
+            "mae": float(np.mean(distances)),
             "rmse": float(np.sqrt(mse))}
 
 

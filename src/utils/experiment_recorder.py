@@ -11,7 +11,7 @@ import yaml
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
-from src.utils.trajectory_metrics import trajectory_metrics, velocity_metrics
+from src.utils.trajectory_metrics import trajectory_distances, trajectory_metrics, velocity_metrics
 
 
 class ExperimentRecorder:
@@ -42,6 +42,7 @@ class ExperimentRecorder:
         self.metrics = None
         self.speed_metrics = None
         self.speed_plot_name = None
+        self.time_plot_names = {}
 
         def slug(value):
             return re.sub(r"[^A-Za-z0-9_-]+", "-", str(value)).strip("-") or "unknown"
@@ -154,6 +155,51 @@ class ExperimentRecorder:
         fig.savefig(self.directory / self.speed_plot_name, dpi=160)
         fig.clear()
 
+    def _plot_time_series(self, actual):
+        """Save state, applied control, horizon cost and geometric error histories."""
+        with (self.directory / "data.csv").open(newline="", encoding="utf-8") as stream:
+            rows = list(csv.DictReader(stream))
+        time = np.array([float(row["time_s"]) for row in rows])
+
+        def values(column):
+            return np.array([float(row[column]) if row[column] else np.nan for row in rows])
+
+        distances = trajectory_distances(actual, self.reference_xy)
+        plots = (
+            ("angle.png", "Heading angle", "Angle [rad]",
+             ((values("theta"), "theta"),), False),
+            ("angular_velocity.png", "Angular velocity", "Angular velocity [rad/s]",
+             ((values("omega"), "omega"),), False),
+            ("motor_torques.png", "Applied motor torques", "Torque [N m]",
+             ((values("tau_left"), "Left motor"), (values("tau_right"), "Right motor")), True),
+            ("mpc_cost.png", "MPC horizon objective", "MPC cost",
+             ((values("cost"), "Horizon objective"),), True),
+            ("position_error.png", "Position-to-reference distance", "Position error [m]",
+             ((distances, "Distance to reference path"),), False),
+        )
+        for filename, title, ylabel, series, stepped in plots:
+            fig = Figure(figsize=(9, 4), layout="constrained")
+            FigureCanvasAgg(fig)
+            ax = fig.subplots()
+            for data, label in series:
+                if data is not None and np.isfinite(data).any():
+                    if stepped:
+                        ax.step(time, data, where="post", label=label)
+                    else:
+                        ax.plot(time, data, label=label)
+            if ax.get_legend_handles_labels()[0]:
+                ax.legend()
+            else:
+                message = ("No plant samples recorded" if not rows else
+                           "No reference trajectory available" if filename == "position_error.png"
+                           else "No finite data recorded")
+                ax.text(0.5, 0.5, message, transform=ax.transAxes, ha="center", va="center")
+            ax.set(xlabel="Time [s]", ylabel=ylabel, title=title)
+            ax.grid(True, alpha=0.3)
+            fig.savefig(self.directory / filename, dpi=160)
+            fig.clear()
+            self.time_plot_names[title] = filename
+
     def _evaluation_table(self):
         lines = ["| Deviation | Samples | MSE | MAE | RMSE |",
                  "| --- | ---: | ---: | ---: | ---: |"]
@@ -190,6 +236,7 @@ class ExperimentRecorder:
             else "Trajectory plot will be generated when the run finishes.",
             f"![Reference and actual velocity]({self.speed_plot_name})" if self.speed_plot_name
             else "Velocity comparison unavailable: no paired velocity samples.",
+            *[f"![{title}]({filename})" for title, filename in self.time_plot_names.items()],
             "## Tracking evaluation",
             self._evaluation_table(),
             "## Data convention",
@@ -219,5 +266,6 @@ class ExperimentRecorder:
             self.metrics = trajectory_metrics(actual, self.reference_xy)
             self._plot_trajectory(actual)
             self._evaluate_velocity()
+            self._plot_time_series(actual)
         finally:
             self._write_report(payload)
