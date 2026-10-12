@@ -1,0 +1,35 @@
+robot:
+  name: pioneer
+  type: differential_drive
+
+  # Physical parameters
+  mass: 9.0                   # kg
+  radius: 0.227               # m radius of the circular body
+  wheel_radius: 0.195         # m
+  wheel_base: 0.180           # m distance between the centers of the two wheels  
+
+  linear_friction: 0.01     # s/m, TODO: identify
+  angular_friction: 0.01    # m*s/rad, TODO: identify
+  
+  inertia:
+    Ixx: 0.0764189      # kg*m^2
+    Iyy: 0.114924      # kg*m^2
+    Izz: 0.109887      # kg*m^2
+    Ixy: 0.0
+    Ixz: 0.0
+    Iyz: 0.0           
+
+  # State and input convention
+  state_order: [x, y, theta, v, omega]
+  input_order: [tau_left, tau_right]
+
+  # Optional: derived/alternative limits
+  max_linear_velocity: 1.2     # m/s
+  max_angular_velocity: 5.236    # rad/s
+  max_wheel_angular_velocity: 6.15  # rad/s
+  # Reference velocity profile acceleration limit [m/s^2]
+  a_max: 10.0
+  tau_max: 0.5
+
+  # Optional: simulation-specific parameters
+  safety_radius: 0.005      # m

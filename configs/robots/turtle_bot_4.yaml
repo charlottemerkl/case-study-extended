@@ -1,0 +1,35 @@
+robot:
+  name: turtle_bot_4
+  type: differential_drive
+
+  # Physical parameters
+  mass: 3.9                  # kg
+  radius: 0.24               # m radius of the circular body approximated from 341 x 339 x 351 mm (x*y*z)
+  wheel_radius: 0.036        # m
+  wheel_base: 0.28           # m distance between the centers of the two wheels, approximated from 341 x 339 x 351 mm
+
+  linear_friction: 0.1      # s/m  (bv baseline)
+  angular_friction: 0.1     # m*s/rad  (bo baseline)
+  
+  inertia: # from irobot create3 github repo
+    Ixx: 0.077390      # 1/12*mass*(y*y+z*z) kg*m^2
+    Iyy: 0.077832      # 1/12*mass*(x*x+z*z) kg*m^2
+    Izz: 0.075141      # 1/12*mass*(x*x+y*y) kg*m^2
+    Ixy: 0.0
+    Ixz: 0.0
+    Iyz: 0.0           
+
+  # State and input convention
+  state_order: [x, y, theta, v, omega]
+  input_order: [tau_left, tau_right]
+
+  # Optional: derived/alternative limits
+  max_linear_velocity: 0.31   # m/s
+  max_angular_velocity: 1.9   # rad/s
+  max_wheel_angular_velocity: 8.61   # rad/s
+  # Reference velocity profile acceleration limit [m/s^2]
+  a_max: 7.725 # 7.725 in github
+  tau_max: 0.063738 # calculated
+
+  # Optional: simulation-specific parameters
+  safety_radius: 0.02      # m

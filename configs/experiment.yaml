@@ -1,0 +1,62 @@
+# This config file defines the configuration for the experiment, 
+# including chosen MPC settings, plant (i.e. digital twin or simulation) settings, etc.
+
+robot:
+  name: e_puck
+
+# Reference geometry in world coordinates; validated before simulation.
+ref:
+  start_position: [0.0, 0.0, 0.0, 0.0, 0.0]  # [x, y, theta, v, omega]
+  traj_type: straight  # straight, circular, sinusoidal
+  spacing: 0.1          # geometric resolution, not a timestep
+  bounds:
+    x: [-5.0, 5.0]
+    y: [-5.0, 5.0]
+  t_final: 100.0          # time limit [s]
+  startup:
+    heading_tolerance: 0.02        # rad; align orientation to the initial path tangent first
+    angular_speed_tolerance: 0.02  # rad/s; first rotating before driving
+    angular_velocity: 1.0         # rad/s; also capped by the robot limit
+    angular_acceleration: 1.0     # rad/s^2; rotation reference ramp
+
+  straight:
+    end: [4.0, 0.0]
+
+  circular:
+    radius: 2.0
+    heading: 0.0        # initial tangent direction [rad]
+    turns: 3            # finite lap count, stop at the end
+    clockwise: false
+
+  sinusoidal:
+    length: 4.0         # baseline length, not arc length
+    heading: 0.0        # baseline direction [rad], not initial tangent
+    amplitude: 1.0
+    cycles: 2.0
+
+plant:
+  # Plant timestep
+  dt: 0.001
+
+  # settings for digital twin plant (webots)
+  twin:
+    # Physical parameters
+
+  # settings for simulation plant
+  sim:
+    # Numerical integration
+    solver: rk4    # euler or rk4
+
+mpc:
+  # MPC timestep
+  dt: 0.01
+
+  vehicle_model: nonlinear   # linear or nonlinear
+  horizon: 50
+  acados_json_file: "build/acados_ocp_tracking_diff_drive.json"
+
+  # MPC cost weights (nominal diagonal cost weights built into np.diag by the MPC setup).
+  cost:
+    Q:  [20.0, 20.0, 10.0, 10.0, 10.0]   # x, y, theta, v, omega
+    R:  [0.5, 0.5]                       # tau_l, tau_r
+    Qe: [40.0, 40.0, 0.0, 0.0, 0.0]     # terminal: x, y, theta, v, omega

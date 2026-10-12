@@ -1,0 +1,35 @@
+robot:
+  name: e_puck
+  type: differential_drive
+
+  # Physical parameters
+  mass: 0.15                  # kg
+  radius: 0.035               # m radius of the circular body
+  wheel_radius: 0.02          # m
+  wheel_base: 0.053           # m distance between the centers of the two wheels  
+
+  linear_friction: 1.0e-1      # s/m, TODO: identify
+  angular_friction: 1.0e-4     # m*s/rad, TODO: identify
+  
+  inertia:
+    Ixx: 9.78585e-05      # kg*m^2
+    Iyy: 8.64333e-05      # kg*m^2
+    Izz: 8.74869e-05      # kg*m^2
+    Ixy: 0.0
+    Ixz: 0.0
+    Iyz: 0.0           
+
+  # State and input convention
+  state_order: [x, y, theta, v, omega]
+  input_order: [tau_left, tau_right]
+
+  # Optional: derived/alternative limits
+  max_linear_velocity: 0.15   # m/s
+  max_angular_velocity: 7.536  # rad/s
+  max_wheel_angular_velocity: 6.28  # rad/s
+  # Reference velocity profile acceleration limit [m/s^2]
+  a_max: 10.0
+  tau_max: 10.0 # max torque set in webots
+
+  # Optional: simulation-specific parameters
+  safety_radius: 0.005      # m
