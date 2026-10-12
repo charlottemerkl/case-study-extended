@@ -141,6 +141,9 @@ def build_full_ref_traj(
         v_end=0.0,
     )
     v_spline = CubicSpline(s, v_ref, bc_type="not-a-knot", extrapolate=False)
+    # Startup acceleration is applied in time when sampling the MPC horizon.
+    # Keeping the spatial envelope nonzero at s=0 avoids a stationary horizon.
+    v_spline.a_max = float(a_max)
     return xy_spline, v_spline
 
 
@@ -208,12 +211,15 @@ def sample_ref_window(
     N: int,
     dt: float,
     s_prev: float = 0.0,
+    drive_time: float | None = None,
 ) -> tuple[np.ndarray, float]:
     """
     Sample a reference window of shape (N + 1, 5).
 
-    Starts at the projection of the current state onto the path and advances
-    by the planned arc length v * dt at each step. For periodic (closed) paths
+    Starts at the projection of the current state onto the path. drive_time
+    enables a time-based acceleration ramp from rest, including within the
+    horizon so that zero initial speed does not stall reference progress.
+    For periodic (closed) paths
     the arc length wraps around; otherwise it is clamped at the path end.
     """
     periodic = xy_spline.extrapolate == "periodic"
@@ -234,8 +240,20 @@ def sample_ref_window(
 
     for k in range(N + 1):
         window[k] = eval_ref_state(xy_spline, v_spline, s)
+        if drive_time is not None:
+            window[k, 3] = min(window[k, 3], v_spline.a_max * (drive_time + k * dt))
+            tangent = xy_spline(s, 1)
+            second = xy_spline(s, 2)
+            norm = np.linalg.norm(tangent)
+            curvature = ((tangent[0] * second[1] - tangent[1] * second[0]) / norm ** 3
+                         if norm > 1e-9 else 0.0)
+            window[k, 4] = curvature * window[k, 3]
         v = window[k, 3]
-        s = s + v * dt
+        if drive_time is not None:
+            next_v = min(float(v_spline(s)), v_spline.a_max * (drive_time + (k + 1) * dt))
+            s = s + 0.5 * (v + next_v) * dt
+        else:
+            s = s + v * dt
         if not periodic:
             s = min(s, s_max)
 
@@ -243,6 +261,29 @@ def sample_ref_window(
     window[:, 2] = np.unwrap(window[:, 2])
 
     return window, s_start
+
+
+def sample_rotation_window(state, position, target_theta, N, dt, omega_max, alpha_max):
+    """Plan a shortest-direction rotation at fixed position for a differential drive.
+
+    Angular velocity is ramped with alpha_max; a stopping-distance limit slows
+    the reference near its target. The actual robot remains controlled by MPC.
+    """
+    if not np.isfinite([omega_max, alpha_max]).all() or min(omega_max, alpha_max) <= 0:
+        raise ValueError("Startup rotation limits must be finite and positive.")
+    theta = float(state[2])
+    target = theta + np.arctan2(np.sin(target_theta - theta), np.cos(target_theta - theta))
+    omega = float(state[4])
+    window = np.zeros((N + 1, 5))
+    window[:, :2] = position
+    for k in range(N + 1):
+        window[k, 2], window[k, 4] = theta, omega
+        error = target - theta
+        desired = np.sign(error) * min(omega_max, np.sqrt(2 * alpha_max * abs(error)))
+        next_omega = omega + np.clip(desired - omega, -alpha_max * dt, alpha_max * dt)
+        theta += 0.5 * (omega + next_omega) * dt
+        omega = next_omega
+    return window
 
 
 def sample_full_traj(

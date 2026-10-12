@@ -28,7 +28,7 @@ robot:
   max_angular_velocity: 1.9   # rad/s
   max_wheel_angular_velocity: 8.61   # rad/s
   # Reference velocity profile acceleration limit [m/s^2]
-  a_max: 10.0 # 7.725 in github
+  a_max: 7.725 # 7.725 in github
   tau_max: 0.063738 # calculated
 
   # Optional: simulation-specific parameters

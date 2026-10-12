@@ -20,6 +20,7 @@ from src.mpc.reference_generation import (
     build_full_ref_traj,
     sample_ref_window,
     sample_full_traj,
+    sample_rotation_window,
 )
 
 from src.mpc.vehicle_models import (
@@ -185,6 +186,24 @@ def run_sim_np(
             )
     s_ref = 0.0  # Arc-length progress along the reference
     x_ref_window = None
+    startup = exp_config["ref"].get("startup", {})
+    heading_tolerance = float(startup.get("heading_tolerance", 0.02))
+    angular_speed_tolerance = float(startup.get("angular_speed_tolerance", 0.02))
+    alpha_max = float(startup.get("angular_acceleration", 1.0))
+    model_config = getattr(getattr(mpc, "vehicle_model", None), "config", None)
+    omega_max = min(float(startup.get("angular_velocity", 1.0)),
+                    float(getattr(model_config, "omega_max", 1.0)))
+    if not np.isfinite([heading_tolerance, angular_speed_tolerance, alpha_max, omega_max]).all() or min(
+            heading_tolerance, angular_speed_tolerance, alpha_max, omega_max) <= 0:
+        raise ValueError("ref.startup parameters must be finite and positive.")
+    tangent = xy_spline(0.0, 1)
+    target_heading = float(np.arctan2(tangent[1], tangent[0]))
+    heading_error = np.arctan2(np.sin(target_heading - state[2]), np.cos(target_heading - state[2]))
+    rotating = (abs(heading_error) > heading_tolerance
+                or abs(state[4]) > angular_speed_tolerance)
+    # Nonzero initial linear speeds continue with the existing spatial envelope.
+    drive_started_at = None if rotating else 0.0
+    start_from_rest = abs(state[3]) < 1e-9
 
     # --------------------------------------------- #
 
@@ -202,15 +221,27 @@ def run_sim_np(
             
             mpc_updated = (step % mpc_ratio) == 0
             if mpc_updated:
- 
-                x_ref_window, s_ref = sample_ref_window(
-                    xy_spline=xy_spline,
-                    v_spline=v_spline,
-                    state=state,
-                    N=mpc.N,
-                    dt=mpc.config.dt,
-                    s_prev=s_ref,
-                )
+                heading_error = np.arctan2(np.sin(target_heading - state[2]),
+                                           np.cos(target_heading - state[2]))
+                if rotating and abs(heading_error) <= heading_tolerance and abs(state[4]) <= angular_speed_tolerance:
+                    rotating = False
+                    drive_started_at = t
+                    start_from_rest = True
+                if rotating:
+                    x_ref_window = sample_rotation_window(
+                        state, xy_spline(0.0), target_heading, mpc.N, mpc.config.dt,
+                        omega_max, alpha_max,
+                    )
+                else:
+                    x_ref_window, s_ref = sample_ref_window(
+                        xy_spline=xy_spline,
+                        v_spline=v_spline,
+                        state=state,
+                        N=mpc.N,
+                        dt=mpc.config.dt,
+                        s_prev=s_ref,
+                        drive_time=max(0.0, t - drive_started_at) if start_from_rest else None,
+                    )
 
                 x_ref_window = align_ref_theta_to_state(
                     x_ref_window=x_ref_window,
@@ -229,7 +260,9 @@ def run_sim_np(
             if recorder is not None:
                 recorder.record(step=step, time_s=t, state=state, action=action,
                                 cost=cost, mpc_updated=mpc_updated,
-                                v_ref=float(x_ref_window[0, 3]))
+                                v_ref=float(x_ref_window[0, 3]),
+                                theta_ref=float(x_ref_window[0, 2]),
+                                omega_ref=float(x_ref_window[0, 4]))
 
             if solver_type == "euler":
                 state = euler_step(state, action, dt, robot_params)

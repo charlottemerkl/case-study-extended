@@ -11,7 +11,9 @@ import yaml
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
-from src.utils.trajectory_metrics import trajectory_distances, trajectory_metrics, velocity_metrics
+from src.utils.trajectory_metrics import (
+    orientation_metrics, trajectory_distances, trajectory_metrics, velocity_metrics,
+)
 
 
 class ExperimentRecorder:
@@ -25,7 +27,7 @@ class ExperimentRecorder:
 
     columns = (
         "step", "time_s", "x", "y", "theta", "v", "omega",
-        "tau_left", "tau_right", "cost", "mpc_updated", "v_ref",
+        "tau_left", "tau_right", "cost", "mpc_updated", "v_ref", "theta_ref", "omega_ref",
     )
 
     def __init__(self, root, *, plant_type, experiment_config, robot_config):
@@ -41,18 +43,47 @@ class ExperimentRecorder:
         self.plot_name = None
         self.metrics = None
         self.speed_metrics = None
+        self.orientation_metrics = None
+        self.angular_speed_metrics = None
         self.speed_plot_name = None
         self.time_plot_names = {}
 
         def slug(value):
             return re.sub(r"[^A-Za-z0-9_-]+", "-", str(value)).strip("-") or "unknown"
 
-        name = "_".join((
-            self.started_at.strftime("%Y-%m-%d_%H-%M-%S-%f"),
+        ref = experiment_config["ref"]
+        traj_type = ref["traj_type"]
+        scenario = "_".join((
             plant_type, slug(experiment_config["robot"]["name"]),
-            slug(experiment_config["ref"]["traj_type"]),
+            slug(traj_type),
         ))
-        root = Path(root)
+        parameters = ref.get(traj_type, {})
+
+        def value_label(value):
+            # Preserve decimal points and negative signs in coordinates/parameters.
+            return re.sub(r"[^A-Za-z0-9_.+-]+", "-", str(value)) or "unknown"
+
+        def point_label(point):
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
+                return "unknown"
+            return "_".join(value_label(value) for value in point[:2])
+
+        if traj_type == "straight":
+            details = (f"start-{point_label(ref.get('start_position'))}_"
+                       f"end-{point_label(parameters.get('end'))}")
+        elif traj_type == "circular":
+            direction = "clockwise" if parameters.get("clockwise", False) else "counterclockwise"
+            details = (f"radius-{value_label(parameters.get('radius', 'unknown'))}_"
+                       f"turns-{value_label(parameters.get('turns', 1))}_{direction}")
+        elif traj_type == "sinusoidal":
+            details = "_".join(
+                f"{key}-{value_label(parameters.get(key, default))}"
+                for key, default in (("length", "unknown"), ("amplitude", "unknown"), ("cycles", 1.0))
+            )
+        else:
+            details = "parameters-unknown"
+        name = f"{self.started_at.strftime('%Y-%m-%d_%H-%M-%S-%f')}_{details}"
+        root = Path(root) / scenario
         root.mkdir(parents=True, exist_ok=True)
         for suffix in range(10000):
             self.directory = root / (name if suffix == 0 else f"{name}_{suffix}")
@@ -83,17 +114,20 @@ class ExperimentRecorder:
         self.reference_xy = xy.copy()
         np.savetxt(self.directory / "reference.csv", xy, delimiter=",", header="x,y", comments="")
 
-    def record(self, *, step, time_s, state, action, cost, mpc_updated, v_ref=None):
+    def record(self, *, step, time_s, state, action, cost, mpc_updated, v_ref=None,
+               theta_ref=None, omega_ref=None):
         state, action = np.asarray(state, dtype=float), np.asarray(action, dtype=float)
         if state.shape != (5,) or action.shape != (2,):
             raise ValueError("Expected state shape (5,) and action shape (2,).")
         if not np.isfinite(state).all() or not np.isfinite(action).all():
             raise ValueError("Cannot record non-finite state or action.")
-        if v_ref is not None and not np.isfinite(float(v_ref)):
-            raise ValueError("v_ref must be finite when provided.")
+        for name, value in (("v_ref", v_ref), ("theta_ref", theta_ref), ("omega_ref", omega_ref)):
+            if value is not None and not np.isfinite(float(value)):
+                raise ValueError(f"{name} must be finite when provided.")
         self._writer.writerow((int(step), float(time_s), *state, *action,
                                "" if cost is None else float(cost), int(mpc_updated),
-                               "" if v_ref is None else float(v_ref)))
+                               *["" if value is None else float(value)
+                                 for value in (v_ref, theta_ref, omega_ref)]))
         self._file.flush()
         self.samples += 1
         self.last_time = float(time_s)
@@ -155,6 +189,19 @@ class ExperimentRecorder:
         fig.savefig(self.directory / self.speed_plot_name, dpi=160)
         fig.clear()
 
+    def _evaluate_angular_tracking(self):
+        with (self.directory / "data.csv").open(newline="", encoding="utf-8") as stream:
+            rows = list(csv.DictReader(stream))
+        for column, attribute, evaluate in (
+            ("theta", "orientation_metrics", orientation_metrics),
+            ("omega", "angular_speed_metrics", velocity_metrics),
+        ):
+            paired = [row for row in rows if row.get(f"{column}_ref", "") != ""]
+            setattr(self, attribute, evaluate(
+                [float(row[column]) for row in paired],
+                [float(row[f"{column}_ref"]) for row in paired],
+            ))
+
     def _plot_time_series(self, actual):
         """Save state, applied control, horizon cost and geometric error histories."""
         with (self.directory / "data.csv").open(newline="", encoding="utf-8") as stream:
@@ -162,14 +209,14 @@ class ExperimentRecorder:
         time = np.array([float(row["time_s"]) for row in rows])
 
         def values(column):
-            return np.array([float(row[column]) if row[column] else np.nan for row in rows])
+            return np.array([float(row[column]) if row.get(column, "") else np.nan for row in rows])
 
         distances = trajectory_distances(actual, self.reference_xy)
         plots = (
             ("angle.png", "Heading angle", "Angle [rad]",
-             ((values("theta"), "theta"),), False),
+             ((values("theta"), "Actual theta"), (values("theta_ref"), "Reference theta")), False),
             ("angular_velocity.png", "Angular velocity", "Angular velocity [rad/s]",
-             ((values("omega"), "omega"),), False),
+             ((values("omega"), "Actual omega"), (values("omega_ref"), "Reference omega")), False),
             ("motor_torques.png", "Applied motor torques", "Torque [N m]",
              ((values("tau_left"), "Left motor"), (values("tau_right"), "Right motor")), True),
             ("mpc_cost.png", "MPC horizon objective", "MPC cost",
@@ -183,8 +230,10 @@ class ExperimentRecorder:
             ax = fig.subplots()
             for data, label in series:
                 if data is not None and np.isfinite(data).any():
-                    if stepped:
-                        ax.step(time, data, where="post", label=label)
+                    reference = label.startswith("Reference ")
+                    if stepped or reference:
+                        ax.step(time, data, where="post", label=label,
+                                linestyle="--" if reference else "-")
                     else:
                         ax.plot(time, data, label=label)
             if ax.get_legend_handles_labels()[0]:
@@ -201,27 +250,35 @@ class ExperimentRecorder:
             self.time_plot_names[title] = filename
 
     def _evaluation_table(self):
-        lines = ["| Deviation | Samples | MSE | MAE | RMSE |",
-                 "| --- | ---: | ---: | ---: | ---: |"]
+        lines = ["| Deviation | Samples | MSE | MAE | RMSE | Max |",
+                 "| --- | ---: | ---: | ---: | ---: | ---: |"]
         for name, metrics, unit, squared in (
             ("Position-to-reference distance", self.metrics, "m", "m²"),
             ("Linear velocity v − v_ref", self.speed_metrics, "m/s", "(m/s)²"),
+            ("Orientation wrap(θ − θ_ref)", self.orientation_metrics, "rad", "rad²"),
+            ("Angular velocity ω − ω_ref", self.angular_speed_metrics, "rad/s", "(rad/s)²"),
         ):
             if metrics is None:
-                lines.append(f"| {name} | 0 | — | — | — |")
+                lines.append(f"| {name} | 0 | — | — | — | — |")
             else:
                 lines.append(
                     f"| {name} | {metrics['samples']} | {metrics['mse']:.6g} {squared} | "
-                    f"{metrics['mae']:.6g} {unit} | {metrics['rmse']:.6g} {unit} |"
+                    f"{metrics['mae']:.6g} {unit} | {metrics['rmse']:.6g} {unit} | "
+                    f"{metrics['max']:.6g} {unit} |"
                 )
-        lines += ["", "MSE = mean(e²), MAE = mean(abs(e)), RMSE = sqrt(MSE). "
+        lines += ["", "MSE = mean(e²), MAE = mean(abs(e)), RMSE = sqrt(MSE), Max = max(abs(e)). "
                   "All evaluated samples have equal weight, including partial runs. "
                   "Position error is the shortest distance to the line segments in reference.csv; "
                   "this approximates the continuous reference and does not measure timing, "
                   "lap progress or path completion. Velocity error is v − v_ref at the same "
                   "recorded time. v_ref is the first velocity of the latest MPC reference "
-                  "window, held between MPC updates. Samples without v_ref are excluded "
-                  "from velocity evaluation. Evaluation unavailable (—) indicates missing data."]
+                  "window, held between MPC updates. Orientation error is the shortest angular "
+                  "difference atan2(sin(θ − θ_ref), cos(θ − θ_ref)); angular velocity error is "
+                  "ω − ω_ref without angle wrapping. Angular references likewise use the first "
+                  "stage of the latest MPC window, held between updates. During startup rotation "
+                  "this first stage is initialized from the measured orientation and angular velocity. "
+                  "Samples missing a reference are excluded from the corresponding evaluation. "
+                  "Evaluation unavailable (—) indicates missing data."]
         return "\n".join(lines)
 
     def _write_report(self, status):
@@ -245,6 +302,9 @@ class ExperimentRecorder:
             "positions in m, velocities in m/s and rad/s, torques in N m. "
             "`cost` is the latest MPC horizon objective (not an instantaneous stage cost); "
             "it is held between updates. `mpc_updated=1` marks a new MPC solution. "
+            "`theta_ref` and `omega_ref` are the first-stage heading and angular velocity "
+            "of the latest MPC reference window, held between updates, including startup rotation. "
+            "theta_ref uses the angle branch aligned to the plant state by the controller. "
             "The last row can precede an interrupted or failed integration step.",
             "## Experiment configuration",
             "```yaml\n" + yaml.safe_dump(self.experiment_config, sort_keys=False, allow_unicode=True) + "```",
@@ -266,6 +326,7 @@ class ExperimentRecorder:
             self.metrics = trajectory_metrics(actual, self.reference_xy)
             self._plot_trajectory(actual)
             self._evaluate_velocity()
+            self._evaluate_angular_tracking()
             self._plot_time_series(actual)
         finally:
             self._write_report(payload)

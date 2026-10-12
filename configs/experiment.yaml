@@ -7,15 +7,20 @@ robot:
 # Reference geometry in world coordinates; validated before simulation.
 ref:
   start_position: [0.0, 0.0, 0.0, 0.0, 0.0]  # [x, y, theta, v, omega]
-  traj_type: sinusoidal  # straight, circular, sinusoidal
+  traj_type: straight  # straight, circular, sinusoidal
   spacing: 0.1          # geometric resolution, not a timestep
   bounds:
     x: [-5.0, 5.0]
     y: [-5.0, 5.0]
   t_final: 100.0          # time limit [s]
+  startup:
+    heading_tolerance: 0.02        # rad; align orientation to the initial path tangent first
+    angular_speed_tolerance: 0.02  # rad/s; first rotating before driving
+    angular_velocity: 1.0         # rad/s; also capped by the robot limit
+    angular_acceleration: 1.0     # rad/s^2; rotation reference ramp
 
   straight:
-    end: [-4.0, 3.0]
+    end: [4.0, 0.0]
 
   circular:
     radius: 2.0
@@ -52,7 +57,6 @@ mpc:
 
   # MPC cost weights (nominal diagonal cost weights built into np.diag by the MPC setup).
   cost:
-    Q:  [20.0, 20.0, 10.0, 1.0, 10.0]   # x, y, theta, v, omega
+    Q:  [20.0, 20.0, 10.0, 10.0, 10.0]   # x, y, theta, v, omega
     R:  [0.5, 0.5]                       # tau_l, tau_r
     Qe: [40.0, 40.0, 0.0, 0.0, 0.0]     # terminal: x, y, theta, v, omega
-

@@ -59,9 +59,9 @@ class Weights:
     Q = np.diag([
         20.0,   # x
         20.0,   # y
-        30.0,    # theta
-        0.0,    # v
-        30.0,    # omega
+        10.0,    # theta
+        10.0,    # v
+        10.0,    # omega
     ])
     # positive definite
     R = np.diag([
@@ -100,8 +100,8 @@ class VehicleConstraints:
         ])
 
         # Input constraints: lower and upper bounds
-        self.u_min = np.array([-50.0, -50.0])
-        self.u_max = np.array([50.0, 50.0])
+        self.u_min = np.array([-vehicle_model.config.tau_max, -vehicle_model.config.tau_max])
+        self.u_max = np.array([vehicle_model.config.tau_max, vehicle_model.config.tau_max])
 
         ### wheel speed max limit unused for now ###
 
