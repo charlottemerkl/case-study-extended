@@ -1,169 +1,87 @@
 # MPC Differential-Drive Robot
 
-Model Predictive Control (MPC) for a differential-drive robot using `acados`.
+## Project status
 
-This project is based on previous work from a university group case study and is
-being independently refactored and extended. The current focus is on the MPC
-implementation and its integration with a digital twin.
+**Status: Work in Progress — Active Development**
 
-## 1. Clone the repository
+## Project overview
 
-Clone the repository including all submodules:
+This project extends a group case study at the Technical University of Munich
+(TUM) on combining Model Predictive Control (MPC) and Reinforcement Learning (RL) for vehicle control.
+Only the MPC and simulation components, which I helped develop as part of the
+group, were carried over into this repository. RL is outside the scope of the
+current extension.
 
-```bash
-git clone --recursive git@github.com:charlottemerkl/case-study-extended.git
-cd case-study-extended
-```
+The inherited code has been refactored to prepare it for further development.
+The goal is to extend MPC trajectory tracking from a Python simulation to a
+Webots digital twin and evaluate how the controller behaves when the simulated
+plant differs from its prediction model.
 
-If the repository has already been cloned without `--recursive`, initialize
-the submodules manually:
+## Features
 
-```bash
-git submodule update --init --recursive
-```
+- Reference trajectory generation for straight, circular, and sinusoidal paths,
+  with velocity profiles and initial heading alignment.
+- MPC trajectory tracking using `acados`, with linear and nonlinear
+  differential-drive prediction models and configurable state and torque limits.
+- YAML experiment configuration and example robot configurations for the e-puck,
+  Pioneer, and TurtleBot 4; current results focus on the e-puck.
+- Python plant simulation with Euler and RK4 integration.
+- Experiment recording with configuration snapshots, CSV measurements,
+  trajectory and state plots, and tracking metrics. 
 
-Afterwards, acados should be available at:
+## Current results and outlook
+
+Experiments with the e-puck simulation cover straight, circular, and sinusoidal
+trajectories. The recorded runs demonstrate trajectory tracking under the chosen
+model assumptions. A short [analysis of the e-puck simulation results](docs/sim-e-puck-analysis.md)
+summarizes the scenarios, tracking errors, and limitations.
+
+The next development focus is reliable control of the Webots digital twin.
+Initial torque and MPC experiments already exist, but robust stopping and the
+transfer between the simulation and Webots still need work.
+
+A central difficulty is that the effective friction parameters of the Webots
+plant have not been identified. The friction coefficients used in the Python
+simulation and MPC model are currently fixed assumptions rather than calibrated
+values. Good tracking in the Python simulation therefore does not establish
+that the same parameters accurately describe the digital twin. Further work will
+focus on identifying these differences and improving controller robustness.
+
+## Project structure
 
 ```text
-external/acados/
+configs/
+  experiment.yaml       Experiment, reference, plant, and MPC settings
+  robots/               Example robot parameters and limits
+src/
+  mpc/                  Prediction models, MPC controller, reference generation
+  sim/                  Python plant dynamics, integration, simulation controller
+  utils/                Shared configuration, recording, and evaluation
+experiments/            Saved runs grouped by plant, robot, and trajectory
+scripts/                Project environment activation
+external/acados/        acados Git submodule
+docs/                   Installation instructions and result analysis
 ```
 
----
+Solver-generated build and code export directories are runtime artifacts.
 
-## 2. Install system dependencies
+## Installation and documentation
 
-The following instructions assume Ubuntu or WSL with Ubuntu.
+Follow the [installation guide](docs/installation.md) to build `acados`, install
+Python dependencies, and activate the project environment.
 
-Install the tools required to build acados:
-
-```bash
-sudo apt update
-sudo apt install -y build-essential cmake git
-```
-
-## 3. Create the Python virtual environment
-
-From the project root, create a virtual environment using Python 3.12:
-
-```bash
-python3.12 -m venv .venv
-```
-
-Activate it:
-
-```bash
-source .venv/bin/activate
-```
-
-Upgrade the Python packaging tools:
-
-```bash
-python -m pip install --upgrade pip setuptools wheel
-```
-
----
-
-## 4. Build acados
-
-acados is included as a Git submodule under `external/acados`.
-
-From the project root:
-
-```bash
-cd external/acados
-git submodule update --init --recursive
-```
-
-Configure the build:
-
-```bash
-cmake -S . -B build \
-    -DACADOS_WITH_QPOASES=ON
-```
-
-Build and install acados:
-
-```bash
-cmake --build build --target install -j4
-```
-
-Return to the project root:
-
-```bash
-cd ../..
-```
-
----
-
-## 5. Install Python dependencies
-
-Make sure the virtual environment is active:
-
-```bash
-source .venv/bin/activate
-```
-
-Install the project dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-Install the acados Python interface from the local acados submodule:
-
-```bash
-pip install -e external/acados/interfaces/acados_template
-```
-
----
-
-## 6. Activate the project environment
-
-The project provides an activation script that activates the Python virtual
-environment and configures the paths required by acados.
-
-From the project root, run:
+From the project root, start a Python simulation with:
 
 ```bash
 source scripts/activate.sh
+python src/sim/control_sim.py
 ```
 
-The script performs the equivalent of:
+The default experiment is configured in `configs/experiment.yaml`. Select another
+experiment file with `--exp-config` and a robot configuration with
+`--robot-config`. Keep the robot YAML consistent with `robot.name` in the
+experiment configuration.
 
-```bash
-source .venv/bin/activate
-
-export ACADOS_SOURCE_DIR="$PROJECT_ROOT/external/acados"
-export LD_LIBRARY_PATH="$ACADOS_SOURCE_DIR/lib:${LD_LIBRARY_PATH:-}"
-```
-
-After activation, the terminal should use the Python 3.12 environment located
-in `.venv`.
-
-For every new terminal session, it is sufficient to run:
-
-```bash
-source scripts/activate.sh
-```
-
-When finished working on the project, deactivate the Python environment with:
-
-```bash
-deactivate
-```
-
----
-
-## 7. Verify the acados installation
-
-Before running the MPC implementation, the acados installation can be tested
-using one of the examples shipped with acados.
-
-For example:
-
-```bash
-python external/acados/examples/acados_python/getting_started/minimal_example_ocp.py
-```
-
-If the example executes successfully, both the acados C libraries and the
-Python interface are configured correctly.
+See the [simulation analysis](docs/sim-e-puck-analysis.md) for the current results.
+Each saved experiment includes a `report.md`, configuration snapshots, CSV data,
+and plots for inspecting the individual run.
