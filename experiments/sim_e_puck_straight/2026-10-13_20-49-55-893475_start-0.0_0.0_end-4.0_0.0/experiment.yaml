@@ -1,0 +1,64 @@
+robot:
+  name: e_puck
+ref:
+  start_position:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  - 0.0
+  traj_type: straight
+  spacing: 0.1
+  bounds:
+    x:
+    - -5.0
+    - 5.0
+    y:
+    - -5.0
+    - 5.0
+  t_final: 100.0
+  startup:
+    heading_tolerance: 0.02
+    angular_speed_tolerance: 0.02
+    angular_velocity: 1.0
+    angular_acceleration: 1.0
+  straight:
+    end:
+    - 4.0
+    - 0.0
+  circular:
+    radius: 2.0
+    heading: 0.0
+    turns: 3
+    clockwise: false
+  sinusoidal:
+    length: 4.0
+    heading: 0.0
+    amplitude: 1.0
+    cycles: 2.0
+plant:
+  dt: 0.001
+  twin: null
+  sim:
+    solver: rk4
+mpc:
+  dt: 0.01
+  vehicle_model: nonlinear
+  horizon: 50
+  acados_json_file: build/acados_ocp_tracking_diff_drive.json
+  cost:
+    Q:
+    - 20.0
+    - 20.0
+    - 10.0
+    - 10.0
+    - 10.0
+    R:
+    - 0.5
+    - 0.5
+    Qe:
+    - 40.0
+    - 40.0
+    - 0.0
+    - 0.0
+    - 0.0
