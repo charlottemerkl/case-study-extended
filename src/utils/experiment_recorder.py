@@ -74,6 +74,7 @@ class ExperimentRecorder:
         elif traj_type == "circular":
             direction = "clockwise" if parameters.get("clockwise", False) else "counterclockwise"
             details = (f"radius-{value_label(parameters.get('radius', 'unknown'))}_"
+                       f"heading-{value_label(parameters.get('heading', 'unknown'))}_"
                        f"turns-{value_label(parameters.get('turns', 1))}_{direction}")
         elif traj_type == "sinusoidal":
             details = "_".join(

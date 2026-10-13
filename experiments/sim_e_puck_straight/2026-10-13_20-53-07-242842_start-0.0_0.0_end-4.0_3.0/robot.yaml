@@ -1,0 +1,31 @@
+robot:
+  name: e_puck
+  type: differential_drive
+  mass: 0.15
+  radius: 0.035
+  wheel_radius: 0.02
+  wheel_base: 0.053
+  linear_friction: 0.1
+  angular_friction: 0.0001
+  inertia:
+    Ixx: 9.78585e-05
+    Iyy: 8.64333e-05
+    Izz: 8.74869e-05
+    Ixy: 0.0
+    Ixz: 0.0
+    Iyz: 0.0
+  state_order:
+  - x
+  - y
+  - theta
+  - v
+  - omega
+  input_order:
+  - tau_left
+  - tau_right
+  max_linear_velocity: 0.15
+  max_angular_velocity: 7.536
+  max_wheel_angular_velocity: 6.28
+  a_max: 0.233
+  tau_max: 0.0005
+  safety_radius: 0.005

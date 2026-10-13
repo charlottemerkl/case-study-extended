@@ -28,8 +28,8 @@ robot:
   max_angular_velocity: 7.536  # rad/s
   max_wheel_angular_velocity: 6.28  # rad/s
   # Reference velocity profile acceleration limit [m/s^2]
-  a_max: 10.0
-  tau_max: 10.0 # max torque set in webots
+  a_max: 0.233 # calculated from max wheel speed and wheel base, assuming straight line motion
+  tau_max: 0.0005 # approximated, realistic motor torque limit [N*m] (for both wheels, same value)
 
   # Optional: simulation-specific parameters
   safety_radius: 0.005      # m
